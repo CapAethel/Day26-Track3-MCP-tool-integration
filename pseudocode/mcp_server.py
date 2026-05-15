@@ -1,73 +1,105 @@
+import json
+import os
+
 from fastmcp import FastMCP
 
-# Create the server object.
-mcp = FastMCP("SQLite Lab MCP Server")
+from db import SQLiteAdapter, ValidationError
+from init_db import create_database
 
-# Build or load the database adapter here.
-# adapter = SQLiteAdapter(...)
+
+def _build_adapter():
+    db_path = os.getenv("SQLITE_LAB_DB")
+    if db_path:
+        if not os.path.exists(db_path):
+            create_database(db_path=db_path, reset=True)
+    else:
+        db_path = create_database(reset=False)
+    return SQLiteAdapter(db_path)
+
+
+adapter = _build_adapter()
+mcp = FastMCP("SQLite Lab MCP Server")
 
 
 @mcp.tool(name="search")
-def search(table, filters=None, columns=None, limit=20, offset=0, order_by=None, descending=False):
-    """
-    Pseudocode:
-    1. Validate the table name.
-    2. Validate selected columns.
-    3. Translate filters into a safe WHERE clause.
-    4. Apply ORDER BY, LIMIT, OFFSET if valid.
-    5. Execute query through adapter.
-    6. Return rows and metadata as structured JSON.
-    """
+def search(
+    table,
+    filters=None,
+    columns=None,
+    limit=20,
+    offset=0,
+    order_by=None,
+    descending=False,
+):
+    """Search rows in a validated table with optional filters and pagination."""
+    try:
+        rows = adapter.search(
+            table=table,
+            columns=columns,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            descending=descending,
+        )
+        return {
+            "table": table,
+            "count": len(rows),
+            "limit": int(limit),
+            "offset": int(offset),
+            "rows": rows,
+        }
+    except ValidationError as error:
+        raise ValueError(str(error)) from error
 
 
 @mcp.tool(name="insert")
 def insert(table, values):
-    """
-    Pseudocode:
-    1. Validate table.
-    2. Ensure values is not empty.
-    3. Validate every column in values.
-    4. Execute parameterized INSERT.
-    5. Return inserted payload, including generated ID if available.
-    """
+    """Insert one row into a validated table using parameterized SQL."""
+    try:
+        result = adapter.insert(table=table, values=values)
+        return {"inserted": result}
+    except ValidationError as error:
+        raise ValueError(str(error)) from error
 
 
 @mcp.tool(name="aggregate")
 def aggregate(table, metric, column=None, filters=None, group_by=None):
-    """
-    Pseudocode:
-    1. Validate metric against allowed functions.
-    2. Validate table and column names.
-    3. Translate optional filters.
-    4. Translate optional GROUP BY.
-    5. Execute COUNT / AVG / SUM / MIN / MAX query.
-    6. Return aggregate rows.
-    """
+    """Compute count/avg/sum/min/max over validated table columns."""
+    try:
+        rows = adapter.aggregate(
+            table=table,
+            metric=metric,
+            column=column,
+            filters=filters,
+            group_by=group_by,
+        )
+        return {
+            "table": table,
+            "metric": metric,
+            "column": column,
+            "group_by": group_by,
+            "rows": rows,
+        }
+    except ValidationError as error:
+        raise ValueError(str(error)) from error
 
 
 @mcp.resource("schema://database")
 def database_schema():
-    """
-    Pseudocode:
-    1. Inspect all database tables.
-    2. Collect column definitions for each table.
-    3. Serialize the schema snapshot as JSON text.
-    """
+    """Return a JSON schema snapshot for all tables in the database."""
+    return json.dumps(adapter.get_database_schema(), indent=2)
 
 
 @mcp.resource("schema://table/{table_name}")
 def table_schema(table_name):
-    """
-    Pseudocode:
-    1. Validate table_name.
-    2. Inspect only that table.
-    3. Return a JSON description of the table schema.
-    """
+    """Return a JSON schema snapshot for one validated table."""
+    try:
+        schema = {table_name: adapter.get_table_schema(table_name)}
+        return json.dumps(schema, indent=2)
+    except ValidationError as error:
+        raise ValueError(str(error)) from error
 
 
 if __name__ == "__main__":
-    # Pseudocode:
-    # - parse transport arguments
-    # - run stdio by default
-    # - optionally run HTTP or SSE transport for demos / bonus work
     mcp.run()
